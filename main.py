@@ -1,7 +1,11 @@
 from keras.layers import Input, Lambda, Activation
 from keras.models import Model
+from keras.optimizers import RMSprop
 from keras.layers.embeddings import Embedding
 import keras.backend as K
+from keras.utils import multi_gpu_model
+from keras.callbacks import ModelCheckpoint, EarlyStopping
+import os
 import utils
 import argparse
 import random
@@ -52,13 +56,12 @@ def build_model(vocab_size, vec_dim, batch_size):
 
     # build and train the model
     model = Model(inputs=[input_pvt, input_ctx], outputs=predictions)
-    model.compile(optimizer='rmsprop', loss='mse', metrics=['accuracy'])
     model.summary()
 
     return model
 
 def main(args):
-    sentences, index2word = utils.load_corpus()
+    sentences, index2word = utils.load_corpus(corpus_file=args.corpus)
     vocab_size = len(index2word)
 
     # create input
@@ -72,9 +75,19 @@ def main(args):
 
     model = build_model(vocab_size, args.vec_dim, args.batch_size)
 
+    if (args.multi_gpu):
+        model = multi_gpu_model(model)
+
+    opt = RMSprop(lr=5e-4, decay=5e-6)
+    checkpoint = ModelCheckpoint(os.path.join(args.ckpt_path, 'Word2Vec_{epoch:03d}.h5'), period=args.ckpt_period, save_weights_only=True)
+    early_stop = EarlyStopping(monitor='loss', patience=10)
+
+    model.compile(optimizer=opt, loss='mse', metrics=['accuracy'])
     model.fit_generator(generator=batch_generator(couples, labels, args.batch_size, nb_batch),
                         steps_per_epoch=samples_per_epoch,
-                        epochs=args.epochs, verbose=1)
+                        epochs=args.epochs,
+                        callbacks=[checkpoint, early_stop],
+                        verbose=1)
 
     # save weights
     utils.save_weights(model, index2word, args.vec_dim)
@@ -82,7 +95,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--corpus', type=str, default='truyen_kieu.txt')
-    parser.add_argument('--epochs', type=int, default=1)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--ckpt_path', type=str, default='./ckpt')
     parser.add_argument('--model_path', type=str, default='./model')
     parser.add_argument('--vec_dim', type=int, default=300)
